@@ -1,0 +1,8 @@
+models/
+.env
+.claude
+checkpoints/
+**/__pycache__/
+*.pyc
+input/
+output/
