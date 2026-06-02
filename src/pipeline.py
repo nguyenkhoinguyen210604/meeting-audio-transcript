@@ -6,24 +6,21 @@ from src.preprocessing.normalizer import normalize
 from src.enhancement.noise_reducer import NoiseReducer
 from src.enhancement.speech_separator import SpeechSeparator
 from src.vad.segmenter import VADSegmenter
-from src.transcription.router import ASRRouter
+from src.transcription.router import ASRRunner
 from src.postprocessing.formatter import Formatter
-from src.postprocessing.summarizer import Summarizer
 
 
 class AudioPipeline:
     """
-    Meeting audio pipeline:
-    normalize → denoise → [separate] → VAD chunk → LID → ASR → summarize
+    Meeting audio pipeline, split into two stages:
+    Stage 1 — preprocess() : normalize → denoise → [separate] → VAD
+    Stage 2 — transcribe()  : ASR → format
     """
 
     def __init__(
         self,
         chunk_seconds: int = 30,
         separate: bool = False,
-        openai_api_key: str | None = None,
-        summarize_model: str = "gpt-4o-mini",
-        summarize: bool = False,
         max_chunk_duration: float = 25.0,
         max_gap: float = 1.5,
     ):
@@ -33,93 +30,105 @@ class AudioPipeline:
             max_chunk_duration=max_chunk_duration,
             max_gap=max_gap,
         )
-        self.router = ASRRouter()
-        self.summarizer = (
-            Summarizer(api_key=openai_api_key, model=summarize_model)
-            if (summarize and openai_api_key)
-            else None
-        )
+        self._asr_runner = None
+        self._asr_key: tuple | None = None
 
-    def run(self, input_file: str, output_dir: str) -> dict:
-        """
-        Full pipeline: input → normalize → denoise → [separate]
-                       → VAD chunk → LID → ASR route → summarize → output
+    # ── Stage 1: pre-ASR (cacheable) ──────────────────────────────────────
 
-        Returns:
-            dict with paths to all produced files.
-        """
+    def preprocess(self, input_file: str, output_dir: str) -> dict:
         os.makedirs(output_dir, exist_ok=True)
         basename = os.path.splitext(os.path.basename(input_file))[0]
-        results: dict = {}
 
         with tempfile.TemporaryDirectory() as tmpdir:
             normalized_wav = os.path.join(tmpdir, "normalized.wav")
-            denoised_wav   = os.path.join(tmpdir, "denoised.wav")
+            denoised_wav = os.path.join(tmpdir, "denoised.wav")
 
-            print("[1] Normalizing audio...")
+            print(f"[pre] Normalizing: {basename}")
             normalize(input_file, normalized_wav)
 
-            print("[2] Reducing noise...")
+            print(f"[pre] Denoising: {basename}")
             self.noise_reducer.process(normalized_wav, denoised_wav)
 
             audio_dir = os.path.join(output_dir, "audio")
             os.makedirs(audio_dir, exist_ok=True)
             denoised_out = os.path.join(audio_dir, f"{basename}_denoised.wav")
             shutil.copy(denoised_wav, denoised_out)
-            results["denoised_wav"] = denoised_out
-            print(f"  Denoised audio → {denoised_out}")
 
             asr_input = denoised_wav
 
             if self.separator:
-                print("[3] Separating speakers...")
+                print(f"[pre] Separating speakers: {basename}")
                 separated_dir = os.path.join(output_dir, "separated")
                 tracks = self.separator.process(denoised_wav, separated_dir)
-                results["separated_tracks"] = tracks
-                print(f"  Speaker tracks → {separated_dir}")
-                for t in tracks:
-                    print(f"    - {t}")
                 if tracks:
                     asr_input = tracks[0]
 
-            print("[3] Running VAD segmentation...")
+            print(f"[pre] VAD: {basename}")
             chunks = self.segmenter.get_chunks(asr_input)
-            if not chunks:
-                print("No speech detected — stopping pipeline.")
-                return results
 
-            print(f"[4] Transcribing {len(chunks)} chunk(s) (LID + ASR routing)...")
-            transcribed = self.router.transcribe(asr_input, chunks)
+        return {
+            "denoised_wav": denoised_out,
+            "chunks": [{"start": c.start, "end": c.end} for c in chunks],
+            "basename": basename,
+        }
 
-            formatter = Formatter(transcribed)
+    # ── Stage 2: ASR only ─────────────────────────────────────────────────
 
-            transcript_txt  = os.path.join(output_dir, f"{basename}_transcript.txt")
-            transcript_json = os.path.join(output_dir, f"{basename}_transcript.json")
-            transcript_srt  = os.path.join(output_dir, f"{basename}_transcript.srt")
-            formatter.save(transcript_txt,  fmt="txt")
-            formatter.save(transcript_json, fmt="json")
-            formatter.save(transcript_srt,  fmt="srt")
-            results["transcript_txt"]  = transcript_txt
-            results["transcript_json"] = transcript_json
-            results["transcript_srt"]  = transcript_srt
+    def transcribe(
+        self,
+        denoised_wav: str,
+        chunks: list[dict],
+        output_dir: str,
+        asr_backend: str = "whisper",
+        asr_model: str = "large-v3",
+        basename: str = "audio",
+    ) -> dict:
+        os.makedirs(output_dir, exist_ok=True)
 
-            if self.summarizer is None:
-                print("\nNo OpenAI API key supplied — skipping summarization.")
-                return results
+        from src.vad.segmenter import AudioChunk
+        chunk_objs = [AudioChunk(c["start"], c["end"]) for c in chunks]
 
-            print("[5] Summarizing...")
-            plain = formatter.to_plain_transcript()
-            summary = self.summarizer.summarize(plain)
-            summary_path = os.path.join(output_dir, f"{basename}_summary.md")
-            self.summarizer.save(summary, summary_path)
-            results["summary_path"] = summary_path
+        if not chunk_objs:
+            print(f"[ASR] No speech chunks — skipping: {basename}")
+            return {}
 
-        print("\nPipeline complete. Outputs:")
-        for key, val in results.items():
-            if isinstance(val, list):
-                for v in val:
-                    print(f"  [{key}] {v}")
-            else:
-                print(f"  [{key}] {val}")
+        asr_key = (asr_backend, asr_model)
+        if self._asr_key != asr_key:
+            print(f"[ASR] Loading model: {asr_backend}/{asr_model}")
+            self._asr_runner = ASRRunner(backend=asr_backend, model=asr_model)
+            self._asr_key = asr_key
 
+        runner = self._asr_runner
+
+        print(f"[ASR] Transcribing {len(chunk_objs)} chunk(s): {basename}")
+        transcribed = runner.transcribe(denoised_wav, chunk_objs)
+
+        formatter = Formatter(transcribed)
+
+        results: dict = {}
+        path = os.path.join(output_dir, f"{basename}_transcript.txt")
+        formatter.save(path, fmt="txt")
+        results["transcript_txt"] = path
+
+        results["transcript_text"] = formatter.to_plain_transcript()
         return results
+
+    # ── Full pipeline (CLI convenience) ────────────────────────────────────
+
+    def run(
+        self,
+        input_file: str,
+        output_dir: str,
+        asr_backend: str = "whisper",
+        asr_model: str = "large-v3",
+    ) -> dict:
+        pre = self.preprocess(input_file, output_dir)
+        asr = self.transcribe(
+            denoised_wav=pre["denoised_wav"],
+            chunks=pre["chunks"],
+            output_dir=output_dir,
+            asr_backend=asr_backend,
+            asr_model=asr_model,
+            basename=pre["basename"],
+        )
+        return {"denoised_wav": pre["denoised_wav"], **asr}

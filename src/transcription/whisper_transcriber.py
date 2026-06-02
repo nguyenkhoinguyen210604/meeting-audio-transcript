@@ -15,15 +15,14 @@ from src.transcription.base import BaseTranscriber, TranscribedSegment
 
 MODEL_SR = 16_000
 
-# (display_label, model_id)
 WHISPER_MODELS: list[tuple[str, str]] = [
-    ("tiny (39M)",          "tiny"),
-    ("base (74M)",          "base"),
-    ("small (244M)",        "small"),
-    ("medium (769M)",       "medium"),
-    ("large-v2 (1.5B)",     "large-v2"),
-    ("large-v3 (1.5B)",     "large-v3"),
-    ("large-v3-turbo (809M)", "large-v3-turbo"),
+    ("tiny (39M)",              "tiny"),
+    ("base (74M)",              "base"),
+    ("small (244M)",            "small"),
+    ("medium (769M)",           "medium"),
+    ("large-v1 (1.5B)",         "large-v1"),
+    ("large-v2 (1.5B)",         "large-v2"),
+    ("large-v3 (1.5B)",         "large-v3"),
 ]
 
 

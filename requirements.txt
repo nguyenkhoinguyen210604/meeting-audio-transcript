@@ -14,11 +14,9 @@
 #   pip install -r requirements.txt
 #
 # ── CONFLICT NOTES ──────────────────────────────────────────
-# [C1] torch: env hiện tại 2.1.2 → cần upgrade lên 2.6.0 (sherpa-onnx CUDAExecutionProvider)
+# [C1] torch: env hiện tại 2.1.2 → cần upgrade lên 2.6.0
 # [C2] numpy 2.4.4 vs DeepFilterNet metadata <2.0: soft conflict,
 #       code tương thích thực tế → install với --no-deps để bỏ qua constraint
-#
-# KHÔNG CÒN conflict lightning/NeMo vì Parakeet giờ dùng sherpa-onnx.
 # ============================================================
 
 # ── PyTorch (cài qua Step 1 với special index) ────────────────────────────
@@ -35,14 +33,15 @@ clearvoice==0.1.2
 # Silero VAD loaded via torch.hub at runtime (snakers4/silero-vad)
 # Nếu muốn pin offline: pip install silero-vad==5.1.2
 
-# ── ASR: Vietnamese (Zipformer) + English (Parakeet) via sherpa-onnx ──────
-sherpa-onnx==1.13.2
-
-# ── ASR: Chinese — SenseVoice (FunASR) ────────────────────────────────────
-funasr==1.3.7
-
-# ── ASR: Fallback + LID — Whisper large-v3 (faster-whisper) ──────────────
+# ── ASR: Whisper (faster-whisper) — tiny/base/small/medium/large-v1/v2/v3 ─
 faster-whisper>=1.0.0
+
+# ── ASR: Qwen3-ASR (transformers) — 0.6B / 1.7B ──────────────────────────
+transformers>=4.51.0
+accelerate>=0.30.0
+
+# ── WER evaluation ────────────────────────────────────────────────────────
+jiwer>=3.0.0
 
 # ── Audio I/O ─────────────────────────────────────────────────────────────
 soundfile>=0.12.1
@@ -52,9 +51,6 @@ ffmpeg==1.4
 # ── HuggingFace ───────────────────────────────────────────────────────────
 huggingface_hub>=0.24.0
 datasets>=2.0.0
-
-# ── Summarization ─────────────────────────────────────────────────────────
-openai>=1.0.0
 
 # ── Web UI ────────────────────────────────────────────────────────────────
 streamlit>=1.35.0
